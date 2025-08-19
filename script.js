@@ -2,8 +2,21 @@ import { System_prompt, FRAME_TEMPLATE } from "./utils.js";
 import { asyncLLM } from "https://cdn.jsdelivr.net/npm/asyncllm@2";
 import { openaiConfig } from "https://cdn.jsdelivr.net/npm/bootstrap-llm-provider@1.2";
 import { bootstrapAlert } from "https://cdn.jsdelivr.net/npm/bootstrap-alert@1";
+import hljs from "https://cdn.jsdelivr.net/npm/highlight.js@11/+esm";
+import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm";
 
 const $ = id => document.getElementById(id);
+const marked = new Marked();
+marked.use({
+  renderer: {
+    code(code, lang) {
+      const language = hljs.getLanguage(lang) ? lang : "javascript";
+      return `<pre class="hljs language-${language}"><code>${hljs.highlight(code, { language })
+        .value.trim()}</code></pre>`;
+    },
+  },
+});
+
 const S = {
   provider: null,
   models: [],
@@ -13,6 +26,10 @@ const S = {
   frameReady: false,
   pendingCode: null,
   session: []
+};
+const controls = {
+  autoRotate: false,
+  wireframe: false
 };
 
 const SYSTEM_PROMPT = System_prompt;
@@ -36,15 +53,19 @@ async function initLlm(show = false) {
         "https://openrouter.ai/api/v1",
         "https://api.anthropic.com/v1"
       ],
-      help: '<div class="alert alert-info">Configure your LLM provider to generate 3D scenes. OpenRouter recommended for model variety.</div>',
       show
     });
-    
     S.provider = { baseUrl: config.baseUrl, apiKey: config.apiKey, models: config.models };
-    S.models = config.models.map(model => ({ id: model, name: model }));
-    S.currentModel = S.models.find(m => m.id.split("/").pop() === "gpt-4.1-mini")?.id || S.models[0]?.id;
-    fillModelDropdown();
-    alertBox('success', 'LLM configured successfully');
+    const filteredModels = config.models.filter(model => {
+      const modelName = model.toLowerCase();
+      return modelName.includes('gpt-4.1') || modelName.includes('gpt-5');
+    });
+    S.models = filteredModels.map(model => ({ id: model, name: model }));
+    S.currentModel = S.models.find(m => m.id.toLowerCase().includes('gpt-4.1'))?.id || 
+                     S.models.find(m => m.id.toLowerCase().includes('gpt-5'))?.id ||
+                     S.models[0]?.id;
+        fillModelDropdown();
+      alertBox('success', `LLM configured successfully `);
   } catch (error) {
     alertBox('danger', `Failed to initialize LLM: ${error.message}`);
   }
@@ -81,21 +102,21 @@ async function llmGenerate({ promptText, priorCode, screenshotDataUrl }) {
       content: `Task: Create a 3D scene per: "${promptText}"\nConstraints:\n- No imports; the runtime provides THREE, OrbitControls as parameters.\n- Add ground plane, reasonable lights, and camera framing of subject.\n- Use new OrbitControls(camera, renderer.domElement) if needed.\n- Return ONLY code for export default function renderScene({ THREE, scene, camera, renderer, controls, OrbitControls }) { ... }.`
     });
   }
+
   const requestOptions = {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${S.provider.apiKey}`
-    },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${S.provider.apiKey}`},
     body: JSON.stringify({ model: S.currentModel, messages, stream: true })
   };
+
   let fullContent = "";
   const codeView = $('code-view');
   try {
     for await (const data of asyncLLM(S.provider.baseUrl + "/chat/completions", requestOptions)) {
       if (data.content) {
         fullContent = data.content;
-        codeView.textContent = stripFences(fullContent);
+        const highlighted = marked.parse(`\`\`\`javascript\n${stripFences(fullContent)}\n\`\`\``);
+        codeView.innerHTML = highlighted;
       }
     }
   } catch (error) {
@@ -104,6 +125,31 @@ async function llmGenerate({ promptText, priorCode, screenshotDataUrl }) {
   }
   return stripFences(fullContent).trim();
 }
+
+const displayScreenshot = (dataUrl) => {
+  const screenshotCard = $('screenshot-card');
+  const screenshotImg = $('screenshot-img');
+  if (dataUrl) {
+    screenshotImg.src = dataUrl;
+    screenshotCard.classList.remove('d-none');
+  } else { screenshotCard.classList.add('d-none');  }
+};
+
+const resetCamera = () => {
+  S.frame.contentWindow.postMessage({ type: 'RESET_CAMERA' }, '*');
+};
+
+const toggleAutoRotate = () => {
+  controls.autoRotate = !controls.autoRotate;
+  S.frame.contentWindow.postMessage({ type: 'TOGGLE_AUTO_ROTATE', value: controls.autoRotate }, '*');
+  $('btn-auto-rotate').textContent = controls.autoRotate ? 'Stop Rotate' : 'Auto-Rotate';
+};
+
+const toggleWireframe = () => {
+  controls.wireframe = !controls.wireframe;
+  S.frame.contentWindow.postMessage({ type: 'TOGGLE_WIREFRAME', value: controls.wireframe }, '*');
+  $('btn-wireframe').textContent = controls.wireframe ? 'Solid' : 'Wireframe';
+};
 
 const runInFrame = code => {
   if (!S.frameReady) { S.pendingCode = code; return; }
@@ -137,6 +183,7 @@ async function submit() {
     if (S.sourceCode) {
       try {
         screenshotDataUrl = await getScreenshot();
+        displayScreenshot(screenshotDataUrl); // Show screenshot thumbnail
       } catch (error) {
         console.warn('Failed to capture screenshot:', error);
       }
@@ -147,9 +194,7 @@ async function submit() {
       runInFrame(code);
       S.session.push({ prompt: promptText, code, screenshot: screenshotDataUrl, timestamp: Date.now() });
       alertBox('success', 'Scene generated successfully');
-    } else {
-      alertBox('warning', 'No code generated. Please try again.');
-    }
+    } else {  alertBox('warning', 'No code generated. Please try again.');  }
   } catch (error) {
     console.error('Generation error:', error);
     alertBox('danger', `Error: ${error.message}`);
@@ -162,43 +207,16 @@ const copyCode = () => {
     .then(() => alertBox('success', 'Code copied')).catch(() => alertBox('danger', 'Failed'));
 };
 
-const saveSession = () => {
-  const sessionData = { session: S.session, currentCode: S.sourceCode, timestamp: Date.now() };
-  const dataUrl = `data:application/json,${encodeURIComponent(JSON.stringify(sessionData, null, 2))}`;
-  Object.assign(document.createElement("a"), { href: dataUrl, download: "3d-prompt-session.json" }).click();
-  alertBox('success', 'Session saved');
-};
-
-const loadSession = file => {
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const data = JSON.parse(e.target.result);
-      S.session = data.session || [];
-      S.sourceCode = data.currentCode || "";
-      $('code-view').textContent = S.sourceCode;
-      if (S.sourceCode) runInFrame(S.sourceCode);
-      alertBox('success', 'Session loaded successfully');
-    } catch (error) {
-      alertBox('danger', 'Failed to load session file');
-    }
-  };
-  reader.readAsText(file);
-};
-
-// Event Listeners
 const addEventListeners = () => {
   $('config-btn').addEventListener('click', () => initLlm(true));
   $('btn-generate').addEventListener('click', submit);
   $('btn-copy').addEventListener('click', copyCode);
-  $('save-conversation').addEventListener('click', saveSession);
-  $('file-input').addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (file) loadSession(file);
-  });
   $('user-prompt').addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {  e.preventDefault();  submit(); }
   });
+  $('btn-reset-camera').addEventListener('click', resetCamera);
+  $('btn-auto-rotate').addEventListener('click', toggleAutoRotate);
+  $('btn-wireframe').addEventListener('click', toggleWireframe);
 };
 
 const handleFrameMessages = e => {
@@ -210,7 +228,7 @@ const handleFrameMessages = e => {
     alertBox('danger', `Execution error: ${e.data.message}`);
   }
 };
-// Initialize
+
 const init = () => {
   S.frame = $('render-frame');
   S.frame.srcdoc = FRAME_TEMPLATE;
@@ -218,4 +236,5 @@ const init = () => {
   window.addEventListener('message', handleFrameMessages);
   initLlm().catch(() => console.log('LLM not configured yet, user will need to click config'));
 };
+
 init();

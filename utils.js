@@ -1,4 +1,4 @@
-export const System_prompt =`You are a Three.js code-generation assistant.
+export const System_prompt = `You are a Three.js code-generation assistant.
 OUTPUT RULES:
 - Output ONLY JavaScript code. No backticks, no markdown, no commentary.
 - Export a default function:
@@ -13,33 +13,23 @@ OUTPUT RULES:
 - Keep triangle count modest unless asked otherwise.
 - Do not create duplicate lights if they already exist in the scene.`;
 
-export const FRAME_TEMPLATE =  `<!DOCTYPE html>
+export const FRAME_TEMPLATE = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <style>html,body{margin:0;height:100%;overflow:hidden;background:#f8f9fa}</style>
 </head>
 <body>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@latest/build/three.module.js",
-    "three/": "https://unpkg.com/three@latest/"
-  }
-}
-</script>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@latest/build/three.module.js","three/":"https://unpkg.com/three@latest/"}}</script>
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "https://unpkg.com/three@latest/examples/jsm/controls/OrbitControls.js";
 
-window.THREE = THREE;
-window.OrbitControls = OrbitControls;
-
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
 renderer.setClearColor(0xf8f9fa);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -48,101 +38,68 @@ document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
+camera.position.set(8, 8, 8);
+controls.target.set(0, 0, 0);
+controls.saveState();
 
-camera.position.set(5, 5, 5);
-camera.lookAt(0, 0, 0);
+const light = new THREE.DirectionalLight(0xffffff, 0.8);
+light.position.set(10, 10, 5);
+light.castShadow = true;
+light.shadow.mapSize.setScalar(2048);
+scene.add(new THREE.AmbientLight(0x404040, 0.4), light, new THREE.GridHelper(20, 20, 0x888888, 0xcccccc));
 
-const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
-scene.add(ambientLight);
+let autoRotate = false, wireframe = false;
+const [ambient, directional, grid] = scene.children;
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-directionalLight.position.set(10, 10, 5);
-directionalLight.castShadow = true;
-directionalLight.shadow.mapSize.width = 2048;
-directionalLight.shadow.mapSize.height = 2048;
-scene.add(directionalLight);
-
-const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0xcccccc);
-scene.add(gridHelper);
-
-function animate() {
+(function animate() {
   requestAnimationFrame(animate);
+  if (autoRotate) scene.rotation.y += 0.01;
   controls.update();
   renderer.render(scene, camera);
-}
-animate();
+})();
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
 });
 
-function clearScene() {
-  const objectsToRemove = [];
-  scene.traverse((child) => {
-    if (child !== ambientLight && child !== directionalLight && child !== gridHelper) {
-      objectsToRemove.push(child);
-    }
-  });
-  objectsToRemove.forEach((obj) => {
+const clearScene = () => {
+  const toRemove = [];
+  scene.traverse(child => ![ambient, directional, grid].includes(child) && toRemove.push(child));
+  toRemove.forEach(obj => {
     scene.remove(obj);
-    if (obj.geometry) obj.geometry.dispose();
-    if (obj.material) {
-      if (Array.isArray(obj.material)) {
-        obj.material.forEach(m => m.dispose());
-      } else {
-        obj.material.dispose();
-      }
-    }
+    obj.geometry?.dispose();
+    [obj.material].flat().filter(Boolean).forEach(m => m.dispose());
   });
-}
+};
 
-window.addEventListener('message', async (e) => {
-  if (e.data.type === 'RUN_CODE') {
+addEventListener('message', async e => {
+  const { type, code, value } = e.data;
+  if (type === 'RUN_CODE') {
     try {
       clearScene();
-      if (e.data.code && e.data.code.trim()) {
-        console.log('Executing code:', e.data.code);
-        
-        // Create module with import map support
-        const moduleCode = \`
-import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-
-\${e.data.code}
-\`;
-        
-        const blob = new Blob([moduleCode], { type: 'text/javascript' });
-        const url = URL.createObjectURL(blob);
-        
+      if (code?.trim()) {
+        const url = URL.createObjectURL(new Blob([\`import * as THREE from "three";import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";\${code}\`], { type: 'text/javascript' }));
         try {
           const module = await import(url);
-          if (typeof module.default === 'function') {
-            await module.default({ THREE, scene, camera, renderer, controls, OrbitControls });
-          } else {
-            throw new Error('Module does not export a default function');
-          }
-        } catch (moduleError) {
-          console.error('Module execution error:', moduleError);
-          throw moduleError;
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+          if (typeof module.default !== 'function') throw new Error('Module does not export a default function');
+          await module.default({ THREE, scene, camera, renderer, controls, OrbitControls });
+          controls.reset();
+        } finally { URL.revokeObjectURL(url); }
       }
       parent.postMessage({ type: 'DONE' }, '*');
-    } catch (error) {
-      console.error('Code execution error:', error);
-      parent.postMessage({ type: 'ERROR', message: error.message }, '*');
-    }
-  } else if (e.data.type === 'GET_SCREENSHOT') {
+    } catch (error) { parent.postMessage({ type: 'ERROR', message: error.message }, '*'); }
+  } else if (type === 'GET_SCREENSHOT') {
     try {
       renderer.render(scene, camera);
-      const dataUrl = renderer.domElement.toDataURL('image/png', 0.9);
-      parent.postMessage({ type: 'SCREENSHOT', dataUrl }, '*');
-    } catch (error) {
-      parent.postMessage({ type: 'ERROR', message: 'Screenshot failed: ' + error.message }, '*');
-    }
+      parent.postMessage({ type: 'SCREENSHOT', dataUrl: renderer.domElement.toDataURL('image/png', 0.9) }, '*');
+    } catch (error) { parent.postMessage({ type: 'ERROR', message: 'Screenshot failed: ' + error.message }, '*'); }
+  } else if (type === 'RESET_CAMERA') controls.reset();
+  else if (type === 'TOGGLE_AUTO_ROTATE') autoRotate = value;
+  else if (type === 'TOGGLE_WIREFRAME') {
+    wireframe = value;
+    scene.traverse(child => child.material && child !== grid && [child.material].flat().forEach(m => m.wireframe = wireframe));
   }
 });
 
