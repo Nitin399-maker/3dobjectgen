@@ -105,7 +105,13 @@ async function llmGenerate({ promptText, priorCode, screenshotDataUrl }) {
 
   const requestOptions = {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${S.provider.apiKey}`},
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${S.provider.apiKey}`,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    },
     body: JSON.stringify({ model: S.currentModel, messages, stream: true })
   };
 
