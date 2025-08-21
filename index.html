@@ -47,26 +47,36 @@
     <div id="alert-host" class="position-fixed top-0 end-0 p-3" style="z-index: 1050;"></div>
     <main class="row g-2">
       <section class="col-12 col-lg-4 d-flex flex-column gap-2">
-        <div class="card">
-          <div class="card-body d-flex flex-column gap-2">
-            <label for="user-prompt" class="form-label m-0">Prompt</label>
-            <textarea id="user-prompt" class="form-control" rows="3" placeholder="e.g., Create a water bottle"></textarea>
-            <div class="d-flex gap-2 align-items-center">
-              <select id="model-select" class="form-select"></select>
-              <button id="btn-generate" class="btn btn-primary">Generate / Update</button>
-            </div>
-            <div id="loading" class="d-flex justify-content-center align-items-center d-none">
-              <div class="spinner-border spinner-border-sm me-2" role="status">
-                <span class="visually-hidden">Loading...</span>
-              </div>
-              <span class="text-muted small">Loading…</span>
-            </div>
+    <div class="card">
+      <div class="card-body d-flex flex-column gap-2">
+        <label for="user-prompt" class="form-label m-0">Prompt</label>
+        <textarea id="user-prompt" class="form-control" rows="3" placeholder="e.g., Create a water bottle"></textarea>
+        <div class="mb-2">
+          <label for="reference-image" class="form-label small">Reference Image</label>
+          <input type="file" id="reference-image" class="form-control" accept="image/*">
+          <div id="image-preview" class="mt-2 d-none">
+            <img id="preview-img" class="img-thumbnail" style="max-height: 100px;">
+            <button type="button" id="remove-image" class="btn btn-sm btn-outline-danger ms-2">Remove</button>
           </div>
         </div>
+        <div class="d-flex gap-2 align-items-center">
+          <select id="model-select" class="form-select"></select>
+          <button id="btn-generate" class="btn btn-primary">Generate / Update</button>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="btn-export-obj" class="btn btn-sm btn-outline-success" disabled>Export OBJ</button>
+        </div>   
+        <div id="loading" class="d-flex justify-content-center align-items-center d-none">
+          <div class="spinner-border spinner-border-sm me-2" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <span class="text-muted small">Loading…</span>
+        </div>
+      </div>
+    </div>
         <div class="card flex-grow-1">
           <div class="card-header d-flex justify-content-between align-items-center">
             <span class="small text-muted">Three.js code (LLM output)</span>
-            <button id="btn-copy" class="btn btn-sm btn-outline-primary">Copy</button>
           </div>
           <pre id="code-view" class="card-body m-0" style="white-space:pre-wrap; word-break:break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 400px; overflow-y: auto;"></pre>
         </div>

@@ -31,7 +31,7 @@ const controls = {
   autoRotate: false,
   wireframe: false
 };
-
+let referenceImageDataUrl = null;
 const SYSTEM_PROMPT = System_prompt;
 const stripFences = s => s.replace(/^```(?:js|javascript)?\s*/i, "").replace(/```$/i, "");
 const alertBox = (type, message) => {
@@ -86,35 +86,44 @@ async function llmGenerate({ promptText, priorCode, screenshotDataUrl }) {
   if (!S.provider) throw new Error('LLM not configured. Please click Config button.');
   const messages = [{ role: "system", content: SYSTEM_PROMPT }];
   if (priorCode && screenshotDataUrl) {
-    messages.push({
-      role: "user",
-      content: [
+    const content = [
+      {
+        type: "text",
+        text: `Task: Modify the existing Three.js scene per: "${promptText}"\n\nCurrent code:\n${priorCode}\n\nA screenshot of the current render is attached. Please update the code so that the 3D object matches the appearance shown in the reference image, ensuring the rendered output looks the same as the reference. IMPORTANT: Do not add any ground plane, base, or floor - only modify the 3D object itself.`
+      },
+      { type: "image_url", image_url: { url: screenshotDataUrl } }
+    ];
+    
+    if (referenceImageDataUrl) {
+      content.push(
         {
           type: "text",
-          text: `Task: Modify the existing Three.js scene per: "${promptText}"\n\nCurrent code:\n${priorCode}\n\nA screenshot of the current render is attached. Please modify the code to implement the requested changes while preserving the overall structure.`
+          text: "Additionally, a reference image is provided to guide the modifications. Focus only on the main object, not any ground or base elements."
         },
-        { type: "image_url", image_url: { url: screenshotDataUrl } }
-      ]
-    });
+        {
+          type: "image_url", image_url: { url: referenceImageDataUrl }
+        }
+      );
+    }
+    messages.push({ role: "user", content });
   } else {
-    messages.push({
-      role: "user",
-      content: `Task: Create a 3D scene per: "${promptText}"\nConstraints:\n- No imports; the runtime provides THREE, OrbitControls as parameters.\n- Add ground plane, reasonable lights, and camera framing of subject.\n- Use new OrbitControls(camera, renderer.domElement) if needed.\n- Return ONLY code for export default function renderScene({ THREE, scene, camera, renderer, controls, OrbitControls }) { ... }.`
-    });
+    const content = [
+      {
+        type: "text",
+        text: `Task: Create a 3D scene per: "${promptText}"\nConstraints:\n- No imports; the runtime provides THREE, OrbitControls as parameters.\n- Add reasonable lights and camera framing of subject.\n- Use new OrbitControls(camera, renderer.domElement) if needed.\n- Return ONLY code for export default function renderScene({ THREE, scene, camera, renderer, controls, OrbitControls }) { ... }.\n- CRITICAL: Do NOT create any ground plane, base, floor, or platform. Create ONLY the requested 3D object floating in space.\n- The scene already has a grid for reference - do not add PlaneGeometry or ground meshes.`
+      }
+    ];
+    if (referenceImageDataUrl) {
+      content.push({ type: "image_url", image_url: { url: referenceImageDataUrl } });
+      content[0].text += "\n\nA reference image is provided to guide the 3D object creation. Focus only on the main object, ignoring any ground or base elements in the reference.";
+    }
+    messages.push({ role: "user", content });
   }
-
   const requestOptions = {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${S.provider.apiKey}`,
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      "Pragma": "no-cache",
-      "Expires": "0"
-    },
+    headers: {  "Content-Type": "application/json","Authorization": `Bearer ${S.provider.apiKey}`},
     body: JSON.stringify({ model: S.currentModel, messages, stream: true })
   };
-
   let fullContent = "";
   const codeView = $('code-view');
   try {
@@ -138,27 +147,47 @@ const displayScreenshot = (dataUrl) => {
   if (dataUrl) {
     screenshotImg.src = dataUrl;
     screenshotCard.classList.remove('d-none');
-  } else { screenshotCard.classList.add('d-none');  }
+  } else {   screenshotCard.classList.add('d-none');  }
 };
 
-const resetCamera = () => {
-  S.frame.contentWindow.postMessage({ type: 'RESET_CAMERA' }, '*');
+const setupImageUpload = () => {
+  const fileInput = $('reference-image');
+  const preview = $('image-preview');
+  const previewImg = $('preview-img');
+  const removeBtn = $('remove-image');
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        referenceImageDataUrl = e.target.result;
+        previewImg.src = referenceImageDataUrl;
+        preview.classList.remove('d-none');
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+  removeBtn.addEventListener('click', () => {
+    referenceImageDataUrl = null;
+    fileInput.value = '';
+    preview.classList.add('d-none');
+  });
 };
 
+const exportOBJ = () => { S.frame.contentWindow.postMessage({ type: 'EXPORT_OBJ' }, '*'); };
+const resetCamera = () => {  S.frame.contentWindow.postMessage({ type: 'RESET_CAMERA' }, '*'); };
 const toggleAutoRotate = () => {
   controls.autoRotate = !controls.autoRotate;
   S.frame.contentWindow.postMessage({ type: 'TOGGLE_AUTO_ROTATE', value: controls.autoRotate }, '*');
   $('btn-auto-rotate').textContent = controls.autoRotate ? 'Stop Rotate' : 'Auto-Rotate';
 };
-
 const toggleWireframe = () => {
   controls.wireframe = !controls.wireframe;
   S.frame.contentWindow.postMessage({ type: 'TOGGLE_WIREFRAME', value: controls.wireframe }, '*');
   $('btn-wireframe').textContent = controls.wireframe ? 'Solid' : 'Wireframe';
 };
-
 const runInFrame = code => {
-  if (!S.frameReady) { S.pendingCode = code; return; }
+  if (!S.frameReady) { S.pendingCode = code;  return; }
   S.frame.contentWindow.postMessage({ type: 'RUN_CODE', code }, '*');
 };
 
@@ -180,16 +209,17 @@ const getScreenshot = () => new Promise((resolve, reject) => {
 
 async function submit() {
   const promptText = $('user-prompt').value.trim();
-  if (!promptText) { alertBox('warning', 'Please enter a prompt'); return; }
-  if (!S.provider) { alertBox('danger', 'Please configure LLM first'); return; }
+  if (!promptText) {  alertBox('warning', 'Please enter a prompt');  return; }
+  if (!S.provider) {  alertBox('danger', 'Please configure LLM first');  return;}
   S.currentModel = $('model-select').value;
   showLoading(true);
+  $('btn-export-obj').disabled = true;
   try {
     let screenshotDataUrl = null;
     if (S.sourceCode) {
       try {
         screenshotDataUrl = await getScreenshot();
-        displayScreenshot(screenshotDataUrl); // Show screenshot thumbnail
+        displayScreenshot(screenshotDataUrl);
       } catch (error) {
         console.warn('Failed to capture screenshot:', error);
       }
@@ -198,9 +228,13 @@ async function submit() {
     if (code) {
       S.sourceCode = code;
       runInFrame(code);
-      S.session.push({ prompt: promptText, code, screenshot: screenshotDataUrl, timestamp: Date.now() });
+      S.session.push({prompt: promptText,code, screenshot: screenshotDataUrl, 
+        referenceImage: referenceImageDataUrl,timestamp: Date.now() 
+      });
       alertBox('success', 'Scene generated successfully');
-    } else {  alertBox('warning', 'No code generated. Please try again.');  }
+    } else {  
+      alertBox('warning', 'No code generated. Please try again.');  
+    }
   } catch (error) {
     console.error('Generation error:', error);
     alertBox('danger', `Error: ${error.message}`);
@@ -208,30 +242,64 @@ async function submit() {
   showLoading(false);
 }
 
-const copyCode = () => {
-  navigator.clipboard.writeText(S.sourceCode)
-    .then(() => alertBox('success', 'Code copied')).catch(() => alertBox('danger', 'Failed'));
-};
-
 const addEventListeners = () => {
   $('config-btn').addEventListener('click', () => initLlm(true));
   $('btn-generate').addEventListener('click', submit);
-  $('btn-copy').addEventListener('click', copyCode);
   $('user-prompt').addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {  e.preventDefault();  submit(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {  
+      e.preventDefault();  
+      submit(); 
+    }
   });
   $('btn-reset-camera').addEventListener('click', resetCamera);
   $('btn-auto-rotate').addEventListener('click', toggleAutoRotate);
   $('btn-wireframe').addEventListener('click', toggleWireframe);
+  $('btn-export-obj').addEventListener('click', exportOBJ);
+  setupImageUpload();
 };
 
 const handleFrameMessages = e => {
-  const { type } = e.data;
+  const { type, data, filename, mimeType, binary, count } = e.data;
   if (type === 'READY') {
     S.frameReady = true;
-    if (S.pendingCode) { runInFrame(S.pendingCode); S.pendingCode = null; }
+    if (S.pendingCode) { 
+      runInFrame(S.pendingCode); 
+      S.pendingCode = null; 
+    }
   } else if (type === 'ERROR') {
-    alertBox('danger', `Execution error: ${e.data.message}`);
+    alertBox('danger', `Error: ${e.data.message}`);
+  } else if (type === 'OBJECTS_READY') {
+    const hasObjects = count > 0;
+    $('btn-export-obj').disabled = !hasObjects;
+    if (hasObjects) {  alertBox('success', `Scene ready for export (${count} objects)`); }
+    else { alertBox('warning', 'No exportable objects found in the scene'); }
+  } else if (type === 'DOWNLOAD') {
+    try {
+      let blob;
+      if (binary) {
+        const binaryString = window.atob(data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        blob = new Blob([bytes], { type: mimeType });
+      } else {
+        blob = new Blob([data], { type: mimeType });
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      alertBox('success', `${filename} downloaded successfully`);
+    } catch (error) {
+      console.error('Download error:', error);
+      alertBox('danger', `Download failed: ${error.message}`);
+    }
   }
 };
 
